@@ -12,7 +12,8 @@ A responsive GitHub Pages dashboard for an ESP32-based 433 MHz RF activity monit
 - RF detector monitoring status
 - GPIO 33 output status
 - Mobile-friendly layout
-- Five-second automatic refresh
+- Two-second automatic refresh
+- Checks Blynk hardware connection status before reading datastreams; clears stale readings and marks the dashboard offline when Blynk reports the device offline
 
 ## Blynk datastream setup
 
@@ -27,12 +28,13 @@ Create these **Integer** datastreams in your Blynk device template:
 | V4 | RF Detector Status | `1` = firmware is monitoring GPIO 12, `0` = not monitoring | 0–1 |
 | V5 | Power Output Status | `1` = GPIO 33 commanded HIGH, `0` = LOW | 0–1 |
 
-The dashboard reads each datastream through Blynk's Device HTTPS API:
+Before reading datastreams, the dashboard checks the device connection using Blynk's `GET https://{server}/external/api/isHardwareConnected?token={token}` endpoint. If Blynk returns `false`, the dashboard marks the device offline and clears stale values. It then reads each datastream through Blynk's Device HTTPS API:
 `GET https://{server}/external/api/get?token={token}&v0`
 
 See the official Blynk documentation:
 - [Get Datastream Value](https://docs.blynk.io/en/blynk.cloud/device-https-api/get-datastream-value)
 - [Get Multiple Datastream Values](https://docs.blynk.io/en/blynk.cloud/device-https-api/get-multiple-datastream-values)
+- [Is Device Connected](https://docs.blynk.io/en/blynk.cloud/device-https-api/is-device-connected)
 
 ## Configure your dashboard
 
@@ -43,7 +45,7 @@ See the official Blynk documentation:
 5. Open the published GitHub Pages URL.
 6. Click **Blynk settings**.
 7. Enter your Blynk server host (usually `blynk.cloud`) and your device Auth Token.
-8. Save and connect. The dashboard refreshes every five seconds.
+8. Save and connect. The dashboard checks device connection status every two seconds.
 
 ## Important security warning
 
@@ -58,7 +60,7 @@ For a public/shared deployment, put the Blynk API calls behind a server-side pro
 
 ## CORS / connection troubleshooting
 
-The browser calls Blynk's HTTPS API directly. If the browser reports a CORS/network error, the static site cannot bypass that restriction; use a server-side proxy as described above.
+The browser calls Blynk's HTTPS API directly, including the device connection-status endpoint. If the browser reports a CORS/network error, the static site cannot bypass that restriction; use a server-side proxy as described above. Note that Blynk may take time to detect an unexpected power loss because it relies on its device heartbeat; the dashboard can only reflect the offline state after Blynk reports it.
 
 Also verify:
 - The device is online in Blynk.

@@ -18,7 +18,7 @@ const PIN_MAP = {
   power: "v5"
 };
 
-const POLL_INTERVAL_MS = 5000;
+const POLL_INTERVAL_MS = 2000;
 const HISTORY_POINTS = 30;
 const DEFAULT_THRESHOLD = 400;
 
@@ -44,7 +44,8 @@ const els = {
   disconnectButton: document.getElementById("disconnectButton"),
   blynkHost: document.getElementById("blynkHost"),
   authToken: document.getElementById("authToken"),
-  settingsMessage: document.getElementById("settingsMessage")
+  settingsMessage: document.getElementById("settingsMessage"),
+  liveTag: document.getElementById("liveTag")
 };
 
 let settings = loadSettings();
@@ -105,6 +106,21 @@ async function getPinValue(pin) {
     throw new Error(`No valid value returned for ${pin.toUpperCase()}. Check the token and datastream.`);
   }
   return numericValue(body, pin);
+}
+
+async function getDeviceConnectionStatus() {
+  const host = cleanHost(settings.host || "blynk.cloud");
+  const url = `https://${host}/external/api/isHardwareConnected?token=${encodeURIComponent(settings.token)}`;
+  const response = await fetch(url, { method: "GET", cache: "no-store" });
+
+  if (!response.ok) {
+    throw new Error(`Blynk device-status request failed (${response.status}).`);
+  }
+
+  const body = (await response.text()).trim().toLowerCase();
+  if (body === "true") return true;
+  if (body === "false") return false;
+  throw new Error("Blynk returned an unexpected device connection status.");
 }
 
 async function readAllDatastreams() {
@@ -203,6 +219,43 @@ function updateActivity(active) {
   }
 }
 
+function clearLiveDashboard(message = "Device is offline. Waiting for it to reconnect to Blynk.") {
+  els.rfValue.textContent = "—";
+  els.thresholdValue.textContent = "—";
+  els.activeWindowsValue.textContent = "—";
+  els.lastUpdate.textContent = "—";
+
+  els.heroCard.classList.remove("alert");
+  els.heroIcon.textContent = "×";
+  els.activityText.textContent = "DEVICE OFFLINE";
+  els.activityText.style.color = "var(--red)";
+  els.activitySubtext.textContent = message;
+
+  setBadge(els.rfDetectorBadge, "state-neutral", "OFFLINE");
+  els.rfDetectorDescription.textContent = "No live detector status is available while the ESP32 is disconnected.";
+  setBadge(els.powerBadge, "state-neutral", "OFFLINE");
+  els.powerDescription.textContent = "No live output status is available while the ESP32 is disconnected.";
+
+  history = [];
+  if (chart) {
+    chart.data.labels = [];
+    chart.data.datasets.forEach(dataset => dataset.data = []);
+    chart.update("none");
+  }
+
+  if (els.liveTag) {
+    els.liveTag.innerHTML = '<span class="status-dot"></span> OFFLINE';
+    els.liveTag.classList.add("offline");
+  }
+}
+
+function markDashboardLive() {
+  if (els.liveTag) {
+    els.liveTag.innerHTML = '<span class="status-dot"></span> LIVE';
+    els.liveTag.classList.remove("offline");
+  }
+}
+
 function updateDashboard(data) {
   const rf = Math.max(0, Math.round(data.rf));
   const active = data.activity === 1;
@@ -235,22 +288,38 @@ function updateDashboard(data) {
   updateChart(rf, threshold);
 }
 
+let pollInProgress = false;
+
 async function pollBlynk() {
-  if (!settings.token) {
-    setConnection("idle", "Not connected");
+  if (!settings.token || pollInProgress) {
+    if (!settings.token) {
+      setConnection("idle", "Not connected");
+      clearLiveDashboard("Add your Blynk device token in settings to begin monitoring.");
+    }
     return;
   }
 
+  pollInProgress = true;
   try {
+    // Check the actual Blynk hardware connection before reading stored pin values.
+    const isOnline = await getDeviceConnectionStatus();
+
+    if (!isOnline) {
+      setConnection("error", "Device offline");
+      clearLiveDashboard();
+      return;
+    }
+
     const data = await readAllDatastreams();
     updateDashboard(data);
-    setConnection("connected", "Blynk connected");
+    markDashboardLive();
+    setConnection("connected", "Device connected");
   } catch (error) {
     console.error(error);
-    setConnection("error", "Connection error");
-    els.activityText.textContent = "DATA UNAVAILABLE";
-    els.activityText.style.color = "var(--amber)";
-    els.activitySubtext.textContent = error.message;
+    setConnection("error", "Connection check failed");
+    clearLiveDashboard(`Could not verify the device connection: ${error.message}`);
+  } finally {
+    pollInProgress = false;
   }
 }
 
@@ -297,8 +366,9 @@ els.disconnectButton.addEventListener("click", () => {
   els.activityText.style.color = "";
   els.activitySubtext.textContent = "Connect your Blynk device to view live readings.";
   els.lastUpdate.textContent = "—";
+  clearLiveDashboard("Dashboard disconnected. Add a Blynk token to reconnect.");
 });
 
 initializeChart();
 if (settings.token) startPolling();
-else setConnection("idle", "Not connected");
+else { setConnection("idle", "Not connected"); clearLiveDashboard("Add your Blynk device token in settings to begin monitoring."); }
